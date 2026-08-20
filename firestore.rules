@@ -1,0 +1,12 @@
+// Reglas de Firestore. Publícalas en Firebase → Firestore → Reglas.
+// Esta es la versión de arranque: el documento queda abierto para que la app
+// funcione sin inicio de sesión. Endurécela cuando actives Authentication
+// (ver la sección "Asegurar la base de datos" en DEPLOY.md).
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shop/main {
+      allow read, write: if true;
+    }
+  }
+}
