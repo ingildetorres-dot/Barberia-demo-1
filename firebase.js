@@ -3,10 +3,11 @@
  *
  * Estas llaves no son secretas: Firebase las diseñó para vivir en el código
  * que corre en el navegador de cualquiera. Lo que de verdad protege los datos
- * son las Reglas de Firestore (archivo firestore.rules), no este archivo.
+ * son las Reglas de Firestore (archivo firestore.rules) y el inicio de sesión.
  */
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCCPQqPEFJSKZu40QztbTZpGa6HcAmg2fw",
@@ -17,4 +18,7 @@ const firebaseConfig = {
   appId: "1:1044900108840:web:407191cd9fc1e4959ef31d",
 };
 
-export const db = getFirestore(initializeApp(firebaseConfig));
+const app = initializeApp(firebaseConfig);
+// ignoreUndefinedProperties: un campo vacío nunca debe tumbar un guardado.
+export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
+export const auth = getAuth(app);
