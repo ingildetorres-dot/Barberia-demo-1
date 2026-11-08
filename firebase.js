@@ -1,24 +1,40 @@
 /**
- * Conexión con Firebase — proyecto "barberia-demo-1" (Demo Barbería).
+ * Conexión con Firebase — UNA instalación por negocio, un solo código para todos.
  *
- * Estas llaves no son secretas: Firebase las diseñó para vivir en el código
- * que corre en el navegador de cualquiera. Lo que de verdad protege los datos
- * son las Reglas de Firestore (archivo firestore.rules) y el inicio de sesión.
+ * La configuración de Firebase de cada negocio NO está escrita aquí: se guarda
+ * en Vercel, en una variable llamada VITE_FIREBASE_CONFIG (Settings →
+ * Environment Variables). Se pega TODO el bloque que Firebase muestra al
+ * registrar la app web (el que empieza con "const firebaseConfig = {").
+ *
+ * Así el mismo repositorio sirve a todos tus clientes, cada uno con su propia
+ * base de datos, y una mejora que subas llega a todos a la vez.
+ *
+ * Estas llaves no son secretas: lo que protege los datos son las Reglas de
+ * Firestore y el inicio de sesión.
  */
 import { initializeApp } from "firebase/app";
 import { initializeFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCCPQqPEFJSKZu40QztbTZpGa6HcAmg2fw",
-  authDomain: "barberia-demo-1.firebaseapp.com",
-  projectId: "barberia-demo-1",
-  storageBucket: "barberia-demo-1.firebasestorage.app",
-  messagingSenderId: "1044900108840",
-  appId: "1:1044900108840:web:407191cd9fc1e4959ef31d",
-};
+/** Saca las 6 llaves de lo que pegaste: acepta el bloque de Firebase tal cual, comillas simples o dobles, o JSON. */
+export function parseFirebaseConfig(text) {
+  const out = {};
+  const re = /["']?(apiKey|authDomain|projectId|storageBucket|messagingSenderId|appId|measurementId)["']?\s*:\s*["']([^"']+)["']/g;
+  let m;
+  while ((m = re.exec(String(text || "")))) out[m[1]] = m[2].trim();
+  return out;
+}
 
-const app = initializeApp(firebaseConfig);
-// ignoreUndefinedProperties: un campo vacío nunca debe tumbar un guardado.
-export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
-export const auth = getAuth(app);
+const config = parseFirebaseConfig(import.meta.env.VITE_FIREBASE_CONFIG);
+/** ¿Está esta instalación conectada a una base de datos? */
+export const firebaseReady = !!(config.apiKey && config.projectId && config.appId);
+
+let db = null;
+let auth = null;
+if (firebaseReady) {
+  const app = initializeApp(config);
+  // ignoreUndefinedProperties: un campo vacío nunca debe tumbar un guardado.
+  db = initializeFirestore(app, { ignoreUndefinedProperties: true });
+  auth = getAuth(app);
+}
+export { db, auth };
