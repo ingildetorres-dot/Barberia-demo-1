@@ -1,11 +1,11 @@
 {
-  "name": "Demo Barbería",
-  "short_name": "Demo Barbería",
-  "description": "Agenda, catálogo y operación de la barbería",
+  "name": "Conty Barber",
+  "short_name": "Conty Barber",
+  "description": "Agenda, caja y operación de tu negocio",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#000000",
+  "background_color": "#F4F2ED",
   "theme_color": "#14161B",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
