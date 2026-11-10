@@ -539,8 +539,12 @@ function msgVars(db, appt, comment) {
 
    · Producto en Conty Licencias: "Conty Barber", código corto BRB
      (las licencias salen como BRB-XXXXX).
-   · La licencia se guarda en shop/main (privado): el administrador la activa
-     UNA vez y vale para todos los celulares del negocio.
+   · El código de la licencia va en Vercel, igual que en Conty POS:
+     Settings → Environment Variables → VITE_LICENCIA (luego Redeploy).
+     La app lo consulta al abrir —también la página pública de reservas—,
+     cada 6 horas y al volver a la app. Vale para todos los celulares.
+   · Instalaciones viejas sin VITE_LICENCIA: el administrador escribe el
+     código en el panel y queda guardado en shop/main (como antes).
    · Direcciones de demo y pruebas NO piden licencia: localhost, o cualquier
      dirección que contenga la palabra "demo".
    · Si no hay internet se respeta lo último que se supo (igual que Conty POS).
@@ -552,7 +556,7 @@ const LICENSE = {
   apiKey: "AIzaSyAwU-NP-_E-lSxaccdCT1ZQ6Sm8WvByiEI",   // llave pública de Conty Licencias (la misma de conty-licencia.js)
   freeHosts: ["localhost", "127.0.0.1"],
   freeHostContains: ["demo"],
-  warnDays: 3,
+  warnDays: 5,          // igual que Conty POS: aviso amarillo 5 días antes
   recheckHours: 6,
 };
 const LICENSE_ON = (() => {
@@ -586,6 +590,21 @@ async function readLicenseRemote(code) {
     producto: fsVal(f.producto) || "", negocio: fsVal(f.negocio) || "", vence: fsVal(f.vence) || "",
     hastaMs: Number(fsVal(f.hastaMs)) || 0, permanente: !!fsVal(f.permanente),
   };
+}
+
+/* --- Licencia desde Vercel (VITE_LICENCIA), igual que las demás apps Conty --- */
+const ENV_LICENSE = String((import.meta.env && import.meta.env.VITE_LICENCIA) || "").trim().toUpperCase().replace(/\s+/g, "");
+const LIC_CACHE = "conty_cita_licencia";
+/** Lo último que se supo de la licencia en este celular (para abrir sin internet). */
+function readLicCache() {
+  try { const c = JSON.parse(localStorage.getItem(LIC_CACHE) || "null"); return c && c.code === ENV_LICENSE ? c : null; } catch (e) { return null; }
+}
+function writeLicCache(l) { try { localStorage.setItem(LIC_CACHE, JSON.stringify(l)); } catch (e) { /* sin almacenamiento */ } }
+/** Consulta en Conty Licencias el código de VITE_LICENCIA. Lanza error si no hay red. */
+async function fetchEnvLicense() {
+  const d = await readLicenseRemote(ENV_LICENSE);
+  const checkedAt = new Date().toISOString();
+  return d.noExiste ? { code: ENV_LICENSE, d: null, invalid: true, checkedAt } : { code: ENV_LICENSE, d, checkedAt };
 }
 
 /** WhatsApp de cobros de Conty (se configura en Conty Licencias → Más → Ajustes). */
@@ -623,6 +642,7 @@ function evaluateLicense(d) {
 /** Estado de la licencia guardada en shop/main. tipo: falta | invalido | otraApp | bloqueo | gracia | pronto | ok */
 function licenseStatus(l) {
   if (!l || !l.code) return { tipo: "falta" };
+  if (l.offline) return { tipo: "bloqueo", titulo: "Sin conexión", texto: "Conéctate a internet una vez para verificar la licencia de este negocio." };
   if (l.invalid || !l.d) return { tipo: "invalido" };
   return evaluateLicense(l.d);
 }
@@ -1110,6 +1130,8 @@ export default function App() {
   const pendingRef = useRef(null);                 // ids de solicitudes ya vistas
   const shopRef = useRef(null);
   const dbRef = useRef(null);
+  // Licencia de VITE_LICENCIA: undefined = consultando por primera vez en este celular.
+  const [envLic, setEnvLic] = useState(() => (LICENSE_ON && ENV_LICENSE ? readLicCache() || undefined : null));
 
   const toast = useCallback((text, tone = "ink") => {
     const id = uid();
@@ -1125,6 +1147,28 @@ export default function App() {
 
   /* 1) Catálogo público: cualquiera puede leerlo (portada, horarios, productos). */
   useEffect(() => onSnapshot(PUB, (s) => { setPub(s.exists() ? s.data() : null); setErr(null); }, onFail("el catálogo")), [onFail]);
+
+  /* 1a) Licencia (VITE_LICENCIA): se consulta al abrir, cada 6 h y al volver a la app. Sin internet se respeta lo último que se supo. */
+  useEffect(() => {
+    if (!LICENSE_ON || !ENV_LICENSE) return undefined;
+    let stop = false, last = 0;
+    const check = async () => {
+      if (Date.now() - last < 5 * 60000) return;   // no más de una consulta cada 5 min
+      last = Date.now();
+      try {
+        const l = await fetchEnvLicense();
+        if (stop) return;
+        setEnvLic(l); writeLicCache(l);
+      } catch (e) {
+        if (!stop) setEnvLic((cur) => cur || { code: ENV_LICENSE, d: null, offline: true });
+      }
+    };
+    check();
+    const t = setInterval(check, LICENSE.recheckHours * 3600000);
+    const vis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", vis);
+    return () => { stop = true; clearInterval(t); document.removeEventListener("visibilitychange", vis); };
+  }, []);
 
   /* 1b) Marca del negocio (también pública: los clientes que reservan ven el logo y los colores). */
   useEffect(() => onSnapshot(BRAND, (s) => {
@@ -1230,11 +1274,16 @@ export default function App() {
     const map = new Map();
     appts.forEach((a) => map.set(a.id, a));
     pendAppts.forEach((a) => map.set(a.id, a));
+    // Con VITE_LICENCIA manda lo que diga Conty Licencias; sin ella, el código guardado en el panel.
+    const stored = shop.license && shop.license.code === ENV_LICENSE ? shop.license : null;
+    const license = ENV_LICENSE && LICENSE_ON
+      ? (envLic && !envLic.offline ? envLic : stored || envLic || shop.license)   // sin red: lo último guardado
+      : shop.license;
     return {
-      ...shop, appointments: [...map.values()], waitlist, staff: staffList,
+      ...shop, license, appointments: [...map.values()], waitlist, staff: staffList,
       legacy: (shop.appointments || []).length + (shop.waitlist || []).length, // datos del sistema anterior sin migrar
     };
-  }, [shop, user, appts, pendAppts, waitlist, staffList]);
+  }, [shop, user, appts, pendAppts, waitlist, staffList, envLic]);
   dbRef.current = db;
 
   /** Lo que ve un visitante sin cuenta (portada, reservas, productos). */
@@ -1499,6 +1548,14 @@ export default function App() {
 
       /** Vuelve a consultar la licencia guardada (por ejemplo, después de pagar). */
       recheckLicense: () => run(async () => {
+        if (ENV_LICENSE) {
+          let l;
+          try { l = await fetchEnvLicense(); }
+          catch (e) { throw userErr("No hay conexión para revisar la licencia. Inténtalo de nuevo."); }
+          setEnvLic(l); writeLicCache(l);
+          await mutate((x) => { x.license = l; });
+          return true;
+        }
         const lic = dbRef.current && dbRef.current.license;
         if (!lic || !lic.code) throw userErr("Todavía no hay un código de licencia.");
         let d;
@@ -1561,7 +1618,7 @@ export default function App() {
   /* Licencia: mientras el panel está abierto se vuelve a consultar cada 6 h (y al volver a la app). */
   const licCode = shop && shop.license ? shop.license.code : "";
   useEffect(() => {
-    if (!LICENSE_ON || !user || !licCode) return undefined;
+    if (!LICENSE_ON || ENV_LICENSE || !user || !licCode) return undefined;
     let stop = false;
     const check = async () => {
       try {
@@ -1583,6 +1640,15 @@ export default function App() {
     return () => { stop = true; clearInterval(t); document.removeEventListener("visibilitychange", vis); };
   }, [user, licCode]);
 
+  /* Con VITE_LICENCIA: lo que dice Conty Licencias se copia a shop/main, así la portada pública (pub/catalog) queda al día. */
+  useEffect(() => {
+    if (!LICENSE_ON || !ENV_LICENSE || !user || !shop || !envLic || envLic.offline) return;
+    const cur = shop.license || null;
+    const same = cur && cur.code === envLic.code && !cur.offline
+      && JSON.stringify([cur.d || null, !!cur.invalid]) === JSON.stringify([envLic.d || null, !!envLic.invalid]);
+    if (!same) mutate((x) => { x.license = { ...envLic }; }).catch((e) => console.error(e));
+  }, [user, shop, envLic]);
+
   /* Limpieza discreta: borra candados de días pasados (solo lo hace un administrador). */
   useEffect(() => {
     if (!user || user.rol !== "admin") return;
@@ -1600,7 +1666,9 @@ export default function App() {
   if (pub === undefined || fbUser === undefined || brand === undefined) return <LoadingScreen err={err} />;
 
   if (mode === "gate") {
-    const lapsed = !!(pub && (pub.suspended || (pub.licensed && pub.licenseUntilMs && Date.now() >= pub.licenseUntilMs)));
+    const lapsed = ENV_LICENSE && LICENSE_ON && envLic && !envLic.offline
+      ? licenseSuspended(envLic)
+      : !!(pub && (pub.suspended || (pub.licensed && pub.licenseUntilMs && Date.now() >= pub.licenseUntilMs)));
     return <Gate db={pubDb} configured={!!pub} suspended={lapsed}
                  onBook={() => setMode("reservar")} onCatalog={() => setMode("catalogo")} onStaff={() => setMode("login")} />;
   }
@@ -1625,6 +1693,7 @@ export default function App() {
 
   /* --- panel del personal --- */
   if (!user || !db) return <LoadingScreen err={err || authErr} />;
+  if (LICENSE_ON && ENV_LICENSE && envLic === undefined && !(shop && shop.license && shop.license.code === ENV_LICENSE)) return <LoadingScreen err={err} />;
   if (licenseBlocked(db)) return <LicenseScreen db={db} actions={actions} user={user} toasts={toasts} />;
 
   const pendientes = db.appointments.filter((a) => a.status === "pendiente").length;
@@ -1852,7 +1921,9 @@ function LicenseScreen({ db, actions, user, toasts }) {
     bloqueo:  { t: st.titulo, x: st.texto },
   }[st.tipo] || { t: "Licencia", x: "" };
   const link = vendorLink(wa, `Hola, quiero renovar mi licencia de ${LICENSE.appName}${db.license && db.license.code ? " (" + db.license.code + ")" : ""}${st.d && st.d.negocio ? " para " + st.d.negocio : ""}.`);
-  const askCode = st.tipo === "falta" || st.tipo === "invalido" || st.tipo === "otraApp";
+  // Con VITE_LICENCIA el código no se escribe aquí: viene de Vercel.
+  const askCode = !ENV_LICENSE && (st.tipo === "falta" || st.tipo === "invalido" || st.tipo === "otraApp");
+  if (ENV_LICENSE && st.tipo === "invalido") info.x = "El código de esta instalación no existe o ya no está activo en Conty Licencias. Escríbenos para revisarlo.";
 
   return (
     <div className="bt min-h-screen flex flex-col items-center justify-center px-5">
@@ -1864,7 +1935,7 @@ function LicenseScreen({ db, actions, user, toasts }) {
         <p style={{ fontSize: 13, color: "var(--slate)", marginTop: 6 }}>{info.x}</p>
         {db.license && db.license.code && !askCode && <div className="bt-inset p-2 mt-3 bt-mono text-center" style={{ fontSize: 13 }}>{db.license.code}</div>}
 
-        {admin && (askCode || st.tipo === "bloqueo") && (
+        {admin && !ENV_LICENSE && (askCode || st.tipo === "bloqueo") && (
           <div className="mt-3">
             <Field label={askCode ? "Código de licencia" : "¿Tienes un código nuevo?"}>
               <input className="bt-input bt-mono" placeholder="BRB-XXXXX" autoCapitalize="characters" value={code} onChange={(e) => setCode(e.target.value)} />
@@ -1877,8 +1948,8 @@ function LicenseScreen({ db, actions, user, toasts }) {
         )}
         {!admin && askCode && <p style={{ fontSize: 12, marginTop: 10 }}>Pídele al administrador que active la licencia.</p>}
 
-        {link && st.tipo !== "falta" && <a className="bt-btn mint w-full mt-3" href={link} target="_blank" rel="noreferrer"><MessageCircle size={13} /> Pagar por WhatsApp</a>}
-        {st.tipo === "bloqueo" && (
+        {link && (st.tipo !== "falta" || ENV_LICENSE) && <a className="bt-btn mint w-full mt-3" href={link} target="_blank" rel="noreferrer"><MessageCircle size={13} /> Pagar por WhatsApp</a>}
+        {(st.tipo === "bloqueo" || ENV_LICENSE) && (
           <button className="bt-btn ghost w-full mt-2" disabled={busy === "re"}
                   onClick={async () => { setBusy("re"); await actions.recheckLicense(); setBusy(""); }}>
             <RefreshCw size={13} /> {busy === "re" ? "Revisando…" : "Ya pagué, revisar otra vez"}
@@ -4236,11 +4307,16 @@ function SettingsView({ db, actions, user, brand }) {
                 {st.texto && <div style={{ color: "var(--slate)", marginTop: 4 }}>{st.texto}</div>}
               </div>
               <div className="flex flex-wrap gap-2 mt-3">
-                <button className="bt-btn ghost sm" disabled={!db.license || busy === "re"}
+                <button className="bt-btn ghost sm" disabled={(!db.license && !ENV_LICENSE) || busy === "re"}
                         onClick={async () => { setBusy("re"); await actions.recheckLicense(); setBusy(""); }}>
                   <RefreshCw size={13} /> {busy === "re" ? "Revisando…" : "Revisar ahora"}
                 </button>
               </div>
+              {ENV_LICENSE ? (
+                <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 10 }}>
+                  El código viene de Vercel (VITE_LICENCIA). Para cambiarlo, edita esa variable y haz Redeploy.
+                </p>
+              ) : (
               <div className="flex gap-2 mt-3">
                 <input className="bt-input bt-mono" placeholder="Cambiar código (BRB-XXXXX)" value={licCode} onChange={(e) => setLicCode(e.target.value)} />
                 <button className="bt-btn" disabled={!licCode.trim() || busy === "lic"}
@@ -4248,6 +4324,7 @@ function SettingsView({ db, actions, user, brand }) {
                   <ShieldCheck size={13} /> Verificar
                 </button>
               </div>
+              )}
             </>
           );
         })()}
